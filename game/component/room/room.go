@@ -6,6 +6,7 @@ import (
 	"framework/msError"
 	"framework/remote"
 	"game/component/base"
+	"game/component/mj"
 	"game/component/proto"
 	"game/component/sz"
 	"game/models/request"
@@ -25,6 +26,7 @@ type Room struct {
 	union         base.UnionBase
 	roomDismissed bool
 	gameStarted   bool
+	askDismiss    map[int]struct{}
 }
 
 func (r *Room) UserReady(uid string, session *remote.Session) {
@@ -39,6 +41,12 @@ func (r *Room) EndGame(session *remote.Session) {
 }
 
 func (r *Room) UserEntryRoom(session *remote.Session, data *entity.User) *msError.Error {
+	curUid := session.GetUid()
+	_, ok1 := r.kickSchedules[curUid]
+	if ok1 {
+		r.kickSchedules[curUid].Stop()
+		delete(r.kickSchedules, curUid)
+	}
 	r.RoomCreator = &proto.RoomCreator{
 		Uid: data.Uid,
 	}
@@ -91,6 +99,9 @@ func (r *Room) RoomMessageHandle(session *remote.Session, req request.RoomMessag
 	if req.Type == proto.GetRoomSceneInfoNotify {
 		r.getRoomSceneInfoPush(session)
 	}
+	if req.Type == proto.AskForDismissNotify {
+		r.askForDismiss(session, req.Data.IsExit)
+	}
 }
 
 func (r *Room) getRoomSceneInfoPush(session *remote.Session) {
@@ -124,14 +135,14 @@ func (r *Room) addKickScheduleEvent(session *remote.Session, uid string) {
 	r.kickSchedules[uid] = time.AfterFunc(30*time.Second, func() {
 		logs.Info("kick 定时执行，代表 用户长时间未准备,uid=%v", uid)
 		//取消定时任务
-		timer, ok := r.kickSchedules[uid]
-		if ok {
+		timer, ok1 := r.kickSchedules[uid]
+		if ok1 {
 			timer.Stop()
+			delete(r.kickSchedules, uid)
 		}
-		delete(r.kickSchedules, uid)
 		//需要判断用户是否该踢出
-		user, ok := r.users[uid]
-		if ok {
+		user, ok2 := r.users[uid]
+		if ok2 {
 			if user.UserStatus < proto.Ready {
 				r.kickUser(user, session)
 				//踢出房间之后，需要判断是否可以解散房间
@@ -159,8 +170,10 @@ func (r *Room) kickUser(user *proto.RoomUser, session *remote.Session) {
 }
 
 func (r *Room) dismissRoom() {
-	r.Lock()
-	defer r.Unlock()
+	if r.TryLock() {
+		r.Lock()
+		defer r.Unlock()
+	}
 	if r.roomDismissed {
 		return
 	}
@@ -173,7 +186,7 @@ func (r *Room) dismissRoom() {
 func (r *Room) cancelAllScheduler() {
 	//需要将房间所有的任务 都取消掉
 	for uid, v := range r.kickSchedules {
-		v.Stop()
+		v.Stop() //阻塞
 		delete(r.kickSchedules, uid)
 	}
 }
@@ -249,6 +262,11 @@ func (r *Room) IsStartGame() bool {
 			userReadyCount++
 		}
 	}
+	if r.gameRule.GameType == int(proto.HongZhong) {
+		if len(r.users) == userReadyCount && userReadyCount >= r.gameRule.MaxPlayerCount {
+			return true
+		}
+	}
 	if len(r.users) == userReadyCount && userReadyCount >= r.gameRule.MinPlayerCount {
 		return true
 	}
@@ -278,6 +296,9 @@ func NewRoom(id string, unionID int64, rule proto.GameRule, u base.UnionBase) *R
 	if rule.GameType == int(proto.PinSanZhang) {
 		r.GameFrame = sz.NewGameFrame(rule, r)
 	}
+	if rule.GameType == int(proto.HongZhong) {
+		r.GameFrame = mj.NewGameFrame(rule, r)
+	}
 	return r
 }
 
@@ -294,4 +315,79 @@ func (r *Room) GameMessageHandle(session *remote.Session, msg []byte) {
 		return
 	}
 	r.GameFrame.GameMessageHandle(user, session, msg)
+}
+
+func (r *Room) askForDismiss(session *remote.Session, exist bool) {
+	r.Lock()
+	defer r.Unlock()
+	//所有同意座次的数组
+	if exist {
+		//同意解散
+		if r.askDismiss == nil {
+			r.askDismiss = make(map[int]struct{})
+		}
+		user := r.users[session.GetUid()]
+		r.askDismiss[user.ChairID] = struct{}{}
+		nameArr := make([]string, len(r.users))
+		chairIDArr := make([]any, len(r.users))
+		avatarArr := make([]string, len(r.users))
+		onlineArr := make([]bool, len(r.users))
+		for _, v := range r.users {
+			nameArr[v.ChairID] = v.UserInfo.Nickname
+			avatarArr[v.ChairID] = v.UserInfo.Avatar
+			_, ok := r.askDismiss[v.ChairID]
+			if ok {
+				chairIDArr[v.ChairID] = true
+			}
+			onlineArr[v.ChairID] = true
+		}
+		data := proto.DismissPushData{
+			NameArr:    nameArr,
+			ChairIDArr: chairIDArr,
+			AskChairId: user.ChairID,
+			OnlineArr:  onlineArr,
+			AvatarArr:  avatarArr,
+			Tm:         30,
+		}
+		r.sendData(proto.AskForDismissPushData(&data), session)
+		if len(r.askDismiss) == len(r.users) {
+			//所有人都同意 解散
+			for _, v := range r.users {
+				r.kickUser(v, session)
+			}
+			if len(r.users) == 0 {
+				r.dismissRoom()
+			}
+		}
+
+	} else {
+		user := r.users[session.GetUid()]
+		//不同意解散
+		nameArr := make([]string, len(r.users))
+		chairIDArr := make([]any, len(r.users))
+		avatarArr := make([]string, len(r.users))
+		onlineArr := make([]bool, len(r.users))
+		for _, v := range r.users {
+			nameArr[v.ChairID] = v.UserInfo.Nickname
+			avatarArr[v.ChairID] = v.UserInfo.Avatar
+			_, ok := r.askDismiss[v.ChairID]
+			if ok {
+				chairIDArr[v.ChairID] = true
+			}
+			onlineArr[v.ChairID] = true
+		}
+		data := proto.DismissPushData{
+			NameArr:    nameArr,
+			ChairIDArr: chairIDArr,
+			AskChairId: user.ChairID,
+			OnlineArr:  onlineArr,
+			AvatarArr:  avatarArr,
+			Tm:         30,
+		}
+		r.sendData(proto.AskForDismissPushData(&data), session)
+	}
+}
+
+func (r *Room) sendData(data any, session *remote.Session) {
+	r.ServerMessagePush(r.AllUsers(), data, session)
 }

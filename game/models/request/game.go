@@ -8,5 +8,6 @@ type RoomMessageReq struct {
 }
 
 type RoomMessageData struct {
+	IsExit  bool `json:"isExit"`
 	IsReady bool `json:"isReady"`
 }

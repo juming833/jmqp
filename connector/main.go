@@ -39,7 +39,7 @@ var (
 
 func init() {
 	rootCmd.Flags().StringVar(&configFile, "config", "application.yml", "app config yml file")
-	rootCmd.Flags().StringVar(&gameConfigDir, "gameDir", "../config", "game config dir")
+	rootCmd.Flags().StringVar(&gameConfigDir, "gameDir", "../config", "game1 config dir")
 	rootCmd.Flags().StringVar(&serverId, "serverId", "", "app server id， required")
 	_ = rootCmd.MarkFlagRequired("serverId")
 }

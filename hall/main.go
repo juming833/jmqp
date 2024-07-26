@@ -12,14 +12,6 @@ import (
 	"os"
 )
 
-//func main() {
-//	//连接websocket
-//	//1.wsmanager2.natsclient
-//	c := connector.Default()
-//	c.Run()
-//
-//}
-
 var rootCmd = &cobra.Command{
 	Use:   "hall",
 	Short: "hall 大厅相关处理",
@@ -39,7 +31,7 @@ var (
 
 func init() {
 	rootCmd.Flags().StringVar(&configFile, "config", "application.yml", "app config yml file")
-	rootCmd.Flags().StringVar(&gameConfigDir, "gameDir", "../config", "game config dir")
+	rootCmd.Flags().StringVar(&gameConfigDir, "gameDir", "../config", "game1 config dir")
 	rootCmd.Flags().StringVar(&serverId, "serverId", "", "app server id， required")
 	_ = rootCmd.MarkFlagRequired("serverId")
 }

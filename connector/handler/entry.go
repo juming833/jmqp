@@ -42,7 +42,7 @@ func (h *EntryHandler) Entry(session *nets.Session, body []byte) (any, error) {
 		return common.Failed(biz.TokenInfoError), nil
 	}
 	//根据uid，取mongo查询用户，没有则创建、
-	user, err := h.userService.FindByUserByUid(context.TODO(), uid, req.UserInfo)
+	user, err := h.userService.FindAndSaveUserByUid(context.TODO(), uid, req.UserInfo)
 	if err != nil {
 		return common.Failed(biz.SqlError), nil
 	}
